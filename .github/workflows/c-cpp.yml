@@ -1,29 +1,110 @@
-name: Build Nintendo DS ROM
+name: Build GameYob DS
 
 on:
   push:
+    branches: [master, main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: devkitpro/devkitarm:latest
-
+    # Once you have a green build, pin this to a dated tag from Docker Hub
+    # (devkitpro/devkitarm:<date>) so toolchain updates can't break this old code.
+    container: devkitpro/devkitarm:latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # Makefile uses `git describe` for the version string
 
-      - name: Build .nds
-        run: make
-        working-directory: platform/ds
+      - name: Let git trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Upload .nds artifact
-        uses: actions/upload-artifact@v4
+      - name: Install DS libraries (libnds, libfat, ndstool, ...)
+        run: dkp-pacman -Syu --noconfirm nds-dev
+
+      - name: Build gameyob.nds
+        run: make -C platform/ds -j"$(nproc)"
+
+      - name: Show result
+        run: |
+          ls -l platform/ds/gameyob.nds
+          sha256sum platform/ds/gameyob.nds
+
+      - uses: actions/upload-artifact@v4
         with:
           name: gameyob-nds
           path: platform/ds/gameyob.nds
           if-no-files-found: error
+
+  # Verifies the one-game shortcut tool works against the *real* compiled binary
+  # (finds exactly one config block, writes paths/banner, CRCs stay valid).
+  shortcut-smoke-test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameyob-nds
+          path: build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pillow
+
+      - name: Generate test icon
+        run: |
+          python - <<'PY'
+          from PIL import Image, ImageDraw
+          im = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+          d = ImageDraw.Draw(im)
+          d.ellipse((4, 4, 60, 60), fill=(200, 30, 30, 255))
+          im.save("test_icon.png")
+          PY
+
+      - name: Make a test shortcut
+        run: |
+          python tools/make_shortcut.py --template build/gameyob.nds \
+            --rom "/roms/GB/Test Game.gb" --bios /bios/gbc_bios.bin \
+            --name "Test Game" --subtitle "Game Boy" \
+            --icon test_icon.png --out build/test.nds
+
+      - name: Verify output
+        run: |
+          python - <<'PY'
+          import struct, importlib.util
+          spec = importlib.util.spec_from_file_location("ms", "tools/make_shortcut.py")
+          ms = importlib.util.module_from_spec(spec); spec.loader.exec_module(ms)
+          r = open("build/test.nds", "rb").read()
+          assert r.count(ms.MAGIC) == 1, "config block missing or duplicated"
+          i = r.index(ms.MAGIC) + 16
+          assert r[i:i+256].split(b"\0")[0] == b"/roms/GB/Test Game.gb"
+          assert r[i+256:i+512].split(b"\0")[0] == b"/bios/gbc_bios.bin"
+          assert struct.unpack_from("<H", r, 0x15E)[0] == ms.crc16(r[:0x15E]), "header CRC"
+          b = struct.unpack_from("<I", r, 0x68)[0]
+          assert struct.unpack_from("<H", r, b+2)[0] == ms.crc16(r[b+0x20:b+0x840]), "banner CRC"
+          print("shortcut tool OK")
+          PY
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, shortcut-smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameyob-nds
+          path: dist
+      - name: Bundle the shortcut tool
+        run: zip -j dist/make_shortcut.zip tools/make_shortcut.py
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/gameyob.nds
+            dist/make_shortcut.zip
+          generate_release_notes: true
