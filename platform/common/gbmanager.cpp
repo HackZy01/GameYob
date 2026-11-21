@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include "gbmanager.h"
+#include "shortcut.h"
 #include "inputhelper.h"
 #include "gameboy.h"
 #include "nifi.h"
@@ -196,6 +197,12 @@ void mgr_loadRom(const char* filename) {
     if (romFile == 0)
         fatalerr("Not enough RAM to load rom");
     gameboy->setRomFile(romFile);
+#ifdef DS
+    // Shortcut builds: load the hardcoded BIOS *before* init, so it is
+    // active from the first boot (not only after the next ROM load).
+    if (shortcutActive() && shortcutConfig.bios[0] != '\0')
+        romFile->loadBios(shortcutConfig.bios);
+#endif
     gameboy->loadSave(1);
 
     hostGb = gameboy;
@@ -268,6 +275,14 @@ void mgr_unloadRom() {
 
 void mgr_selectRom() {
     mgr_unloadRom();
+
+#ifdef DS
+    if (shortcutActive()) {
+        // Single-game shortcut: there is nothing to pick, go back to the
+        // launcher. (Save/no-save was already handled by the menu item.)
+        exit(0);
+    }
+#endif
 
     loadFileChooserState(&romChooserState);
     const char* extraExtensions[] = {"gbs"};

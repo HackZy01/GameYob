@@ -22,6 +22,8 @@
 #include "menu.h"
 #include "gbmanager.h"
 #include "config.h"
+#include "shortcut.h"
+#include "error.h"
 
 void updateVBlank();
 
@@ -105,7 +107,14 @@ int main(int argc, char* argv[])
 
     consoleInitialized = false;
 
-    if (argc >= 2) {
+    if (shortcutActive()) {
+        // Hardcoded ROM (+ optional BIOS), baked in by make_shortcut.py
+        if (!file_exists(shortcutConfig.rom))
+            fatalerr("ROM not found:\n%s", shortcutConfig.rom);
+        mgr_loadRom(shortcutConfig.rom);
+        updateScreens();
+    }
+    else if (argc >= 2) {
         char* filename = argv[1];
         mgr_loadRom(filename);
         updateScreens();
