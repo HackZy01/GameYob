@@ -1,0 +1,29 @@
+name: Build Nintendo DS ROM
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build .nds
+        run: make
+        working-directory: platform/ds
+
+      - name: Upload .nds artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gameyob-nds
+          path: platform/ds/gameyob.nds
+          if-no-files-found: error
