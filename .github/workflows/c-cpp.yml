@@ -10,9 +10,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Once you have a green build, pin this to a dated tag from Docker Hub
-    # (devkitpro/devkitarm:<date>) so toolchain updates can't break this old code.
-    container: devkitpro/devkitarm:latest
+    # GameYob was written for libnds 1.x. libnds 2.0 (Nov 2024) removed headers and
+    # APIs it relies on (nds/fifomessages.h, fifocommon.h, fifoSendValue32, dswifi7.h...),
+    # so `latest` cannot build it. Pin an image from before that switch.
+    # If `docker pull` says "manifest unknown", try devkitpro/devkitarm:20240202.
+    container: devkitpro/devkitarm:20241104
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,8 +23,15 @@ jobs:
       - name: Let git trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Install DS libraries (libnds, libfat, ndstool, ...)
-        run: dkp-pacman -Syu --noconfirm nds-dev
+      - name: Check toolchain (GameYob needs libnds 1.x)
+        run: |
+          v=$(dkp-pacman -Q libnds | awk '{print $2}')
+          echo "libnds $v"
+          dkp-pacman -Q devkitARM libfat-nds dswifi || true
+          case "$v" in
+            1.*) ;;
+            *) echo "::error::libnds $v is too new for GameYob; pin an older devkitarm image"; exit 1 ;;
+          esac
 
       - name: Build gameyob.nds
         run: make -C platform/ds -j"$(nproc)"
